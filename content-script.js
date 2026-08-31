@@ -294,9 +294,19 @@ function formatArticleComponent(title, articleComponent) {
     return markdown.trim();
 }
 
+function isSubmissionAccepted(resultElement) {
+    return resultElement.classList.contains('submission-result-accepted');
+}
+
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     if (message.type === 'CODE_DATA' && message.code && message.title) {
         try {
+            const resultElement = await waitForElement('querySelector', '.submission-result-accepted, .submission-result-wrong');
+            if (!isSubmissionAccepted(resultElement)) {
+                showToast('Submission not accepted, skipping GitHub sync', '#e74c3c');
+                return;
+            }
+
             const questionTitle = await waitForElement('querySelector', 'h1');
             const articleComponent = await waitForElement('querySelector', '.my-article-component-container');
             const markdownContent = formatArticleComponent(questionTitle.textContent, articleComponent);

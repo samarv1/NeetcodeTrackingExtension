@@ -1,5 +1,5 @@
 chrome.webRequest.onBeforeRequest.addListener((details) => {
-      if (details.url.includes("https://us-central1-neetcode-dd170.cloudfunctions.net/executeCodeFunction")) {
+      if (details.url.includes("https://neetcode.io/api/executeCodeFunctionHttp")) {
         const requestBody = details.requestBody;
         const buffer = requestBody.raw[0].bytes;
         const uint8Array = new Uint8Array(buffer);
@@ -9,15 +9,13 @@ chrome.webRequest.onBeforeRequest.addListener((details) => {
         const title = data.data.problemId;
         const code = data.data.rawCode;
 
-        chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-                type: 'CODE_DATA',
-                title: title,
-                code: code
-            });
+        chrome.tabs.sendMessage(details.tabId, {
+            type: 'CODE_DATA',
+            title: title,
+            code: code
         });
       }
     },
-    { urls: ["https://us-central1-neetcode-dd170.cloudfunctions.net/*"] },
+    { urls: ["https://neetcode.io/api/executeCodeFunctionHttp*"] },
     ["requestBody"]
 );

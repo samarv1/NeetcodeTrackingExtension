@@ -298,7 +298,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     if (message.type === 'CODE_DATA' && message.code && message.title) {
         try {
             const questionTitle = await waitForElement('querySelector', 'h1');
-            const articleComponent = await waitForElement('querySelector', 'div.my-article-component-container');
+            const articleComponent = await waitForElement('querySelector', '.my-article-component-container');
             const markdownContent = formatArticleComponent(questionTitle.textContent, articleComponent);
             const languageElement = await waitForElement('querySelector', '.selected-language');
 

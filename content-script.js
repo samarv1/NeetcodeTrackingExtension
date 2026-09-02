@@ -1,21 +1,42 @@
-async function waitForElement(getElement, identifier) {
-    const targetElement = document[getElement](identifier);
-    if (targetElement) {
-        return targetElement;
+async function waitForElement(getElement, identifier, requireFreshResult = false) {
+    const initialElement = document[getElement](identifier);
+    const initialClassName = initialElement ? initialElement.getAttribute('class') : null;
+
+    if (initialElement && !requireFreshResult) {
+        return initialElement;
     }
 
+    // A leftover result element from the previous submission can already match
+    // this selector, so we can't just accept whatever's currently there - we
+    // have to wait for it to actually change (new node, or class mutated).
+    const isFreshResult = (element) =>
+        element && (element !== initialElement || element.getAttribute('class') !== initialClassName);
+
     return new Promise((resolve) => {
-        const observer = new MutationObserver((_, observer) => {
+        let timer;
+        const finish = (element) => {
+            observer.disconnect();
+            clearTimeout(timer);
+            resolve(element);
+        };
+        const observer = new MutationObserver(() => {
             const element = document[getElement](identifier);
-            if (element) {
-                observer.disconnect();
-                resolve(element);
+            if (requireFreshResult ? isFreshResult(element) : element) {
+                finish(element);
             }
         });
         observer.observe(document.body, {
             childList: true,
-            subtree: true
+            subtree: true,
+            ...(requireFreshResult && { attributes: true, attributeFilter: ['class'] })
         });
+
+        // Fall back to whatever's currently there if a fresh result never
+        // shows up, rather than hanging forever if our detection assumptions
+        // about how the result element changes turn out to be wrong.
+        if (requireFreshResult) {
+            timer = setTimeout(() => finish(document[getElement](identifier)), 15000);
+        }
     });
 }
 
@@ -295,13 +316,13 @@ function formatArticleComponent(title, articleComponent) {
 }
 
 function isSubmissionAccepted(resultElement) {
-    return resultElement.classList.contains('submission-result-accepted');
+    return !!resultElement && resultElement.classList.contains('submission-result-accepted');
 }
 
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     if (message.type === 'CODE_DATA' && message.code && message.title) {
         try {
-            const resultElement = await waitForElement('querySelector', '.submission-result-accepted, .submission-result-wrong');
+            const resultElement = await waitForElement('querySelector', '.submission-result-accepted, .submission-result-wrong', true);
             if (!isSubmissionAccepted(resultElement)) {
                 showToast('Submission not accepted, skipping GitHub sync', '#e74c3c');
                 return;

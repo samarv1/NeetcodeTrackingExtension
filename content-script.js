@@ -145,8 +145,10 @@ function getLanguage(language) {
 
 async function addContentToGitHub(code, questionTitle, questionContent, language) {
     const title = questionTitle.replaceAll(' ', '-').toLowerCase().trim();
-    const solutionAdded = await addToGithub(code, title, "solution", getLanguage(language));
-    const problemAdded = await addToGithub(questionContent, title, "problem", "md");
+    const [solutionAdded, problemAdded] = await Promise.all([
+        addToGithub(code, title, "solution", getLanguage(language)),
+        addToGithub(questionContent, title, "problem", "md")
+    ]);
 
     if (solutionAdded.status !== 201 && solutionAdded.status !== 200) {
         return solutionAdded;
@@ -174,6 +176,17 @@ async function addToGithub(content, title, contentType, fileType) {
             },
             content: btoa(String.fromCharCode(...new TextEncoder().encode(content)))
         }
+
+        // Try creating first; GitHub returns 422 only if the file already
+        // exists and needs a sha, which is the only case worth a lookup.
+        const created = await uploadToGitHub(pathName, dataToAdd);
+        if (created.status !== 422) {
+            return {
+                "response": created,
+                "status": created.status
+            };
+        }
+
         const dataToFind = {
             owner: config.github.username,
             repo: config.github.repo_name,
@@ -182,24 +195,22 @@ async function addToGithub(content, title, contentType, fileType) {
                 'Authorization': `Bearer ${config.github.token}`,
                 'X-GitHub-Api-Version': '2022-11-28'
             }
-        }   
+        }
         const existingFile = await findExistingFile(dataToFind, pathName);
-        if (existingFile.status === 200) {
-            dataToAdd.sha = existingFile.response.sha;
-            const data = await uploadToGitHub(pathName, dataToAdd);
+        if (existingFile.status !== 200) {
             return {
-                "response": data,
-                "status": data.status,
-                "updated": true
-            }
-        } else {
-            const data = await uploadToGitHub(pathName, dataToAdd);
-            return {
-                "response": data,
-                "status": data.status,
-                "message": "File does not exist"
+                "response": existingFile,
+                "status": existingFile.status
             };
         }
+
+        dataToAdd.sha = existingFile.response.sha;
+        const updated = await uploadToGitHub(pathName, dataToAdd);
+        return {
+            "response": updated,
+            "status": updated.status,
+            "updated": true
+        };
     } catch (error) {
         console.error(error);
         return {

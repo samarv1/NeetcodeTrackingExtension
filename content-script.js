@@ -159,7 +159,7 @@ async function addContentToGitHub(code, questionTitle, questionContent, language
 async function addToGithub(content, title, contentType, fileType) {
     try {
         const date = getDate();
-        const pathName = `${date}/${title}/${contentType}.${fileType}`;
+        const pathName = `${title}/${date}/${contentType}.${fileType}`;
         const dataToAdd = {
             owner: config.github.username,
             repo: config.github.repo_name,
@@ -198,6 +198,7 @@ async function addToGithub(content, title, contentType, fileType) {
             };
         }
     } catch (error) {
+        console.error(error);
         return {
             "response": error,
             "status": 500

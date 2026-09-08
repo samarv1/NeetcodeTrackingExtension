@@ -2,13 +2,16 @@
 
 A Chrome extension that automatically captures your NeetCode solutions and problem descriptions, then uploads them to your GitHub repository in a well-organized format.
 
+I use this because NeetCode's built-in GitHub sync does not work with private submission repositories.
+
 ## Features
 
-- **Automatic Code Capture**: Captures your solution code when you run or submit it on NeetCode
+- **Automatic Code Capture**: Captures your solution code when you submit it on NeetCode, and only uploads it if the submission is accepted
 - **Problem Description**: Extracts and formats the problem description in Markdown
 - **GitHub Integration**: Automatically uploads both solution and problem files to your GitHub repository
-- **Organized Structure**: Creates a clean folder structure: `{date}/{problem-name}/`
+- **Organized Structure**: Creates a clean folder structure: `{problem-name}/{date}/`
 - **Multiple Languages**: Supports various programming languages (Python, Java, C++, JavaScript, etc.)
+- **In-page Feedback**: Shows a toast on the NeetCode page telling you whether the upload succeeded
 
 ## Installation
 
@@ -73,7 +76,9 @@ NeetcodeTrackingExtension/
 ├── manifest.json
 ├── background.js
 ├── content-script.js
+├── icon.png
 ├── config.js (you need to create this)
+├── LICENSE
 └── README.md
 ```
 
@@ -87,12 +92,12 @@ NeetcodeTrackingExtension/
 
 1. **Navigate to a NeetCode problem** (e.g., https://neetcode.io/problems/two-integer-sum?list=neetcode150/)
 2. **Write your solution** in the code editor
-3. **Submit your solution** (click "Submit" or "Run")
+3. **Submit your solution** (click "Submit")
 4. **Extension automatically captures** your code and the problem description
-5. **Files are uploaded to GitHub** in the following structure:
+5. **Files are uploaded to GitHub** if the submission is accepted, in the following structure:
    ```
-   2024-01-15/
-   └── two-sum/
+   two-sum/
+   └── 2024-01-15/
        ├── solution.py (or .js, .java, etc.)
        └── problem.md
    ```

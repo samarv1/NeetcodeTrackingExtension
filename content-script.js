@@ -1,4 +1,4 @@
-async function waitForElement(getElement, identifier, requireFreshResult = false) {
+async function waitForElement(getElement, identifier, requireFreshResult = false, timeoutMs = 15000) {
     const initialElement = document[getElement](identifier);
     const initialClassName = initialElement ? initialElement.getAttribute('class') : null;
 
@@ -31,12 +31,9 @@ async function waitForElement(getElement, identifier, requireFreshResult = false
             ...(requireFreshResult && { attributes: true, attributeFilter: ['class'] })
         });
 
-        // Fall back to whatever's currently there if a fresh result never
-        // shows up, rather than hanging forever if our detection assumptions
-        // about how the result element changes turn out to be wrong.
-        if (requireFreshResult) {
-            timer = setTimeout(() => finish(document[getElement](identifier)), 15000);
-        }
+        // Every wait is bounded. An element that never shows up would otherwise
+        // hang the submission handler with no toast and nothing in the console.
+        timer = setTimeout(() => finish(document[getElement](identifier)), timeoutMs);
     });
 }
 
@@ -145,10 +142,10 @@ function getLanguage(language) {
 
 async function addContentToGitHub(code, questionTitle, questionContent, language) {
     const title = questionTitle.replaceAll(' ', '-').toLowerCase().trim();
-    const [solutionAdded, problemAdded] = await Promise.all([
-        addToGithub(code, title, "solution", getLanguage(language)),
-        addToGithub(questionContent, title, "problem", "md")
-    ]);
+    // Both PUTs commit against the branch head, so running them in parallel
+    // makes the loser fail on a stale head.
+    const solutionAdded = await addToGithub(code, title, "solution", getLanguage(language));
+    const problemAdded = await addToGithub(questionContent, title, "problem", "md");
 
     if (solutionAdded.status !== 201 && solutionAdded.status !== 200) {
         return solutionAdded;
@@ -161,63 +158,99 @@ async function addContentToGitHub(code, questionTitle, questionContent, language
     return problemAdded;
 }
 
-async function addToGithub(content, title, contentType, fileType) {
-    try {
-        const date = getDate();
-        const pathName = `${title}/${date}/${contentType}.${fileType}`;
-        const dataToAdd = {
-            owner: config.github.username,
-            repo: config.github.repo_name,
-            path: 'PATH',
-            message: `Added ${title} on ${date}`,
-            committer: {
-                name: config.github.committer_name,
-                email: config.github.committer_email
-            },
-            content: btoa(String.fromCharCode(...new TextEncoder().encode(content)))
-        }
+const RETRYABLE_STATUSES = [404, 409, 422, 500, 502, 503, 504];
 
-        // Try creating first; GitHub returns 422 only if the file already
-        // exists and needs a sha, which is the only case worth a lookup.
-        const created = await uploadToGitHub(pathName, dataToAdd);
-        if (created.status !== 422) {
-            return {
-                "response": created,
-                "status": created.status
-            };
-        }
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-        const dataToFind = {
-            owner: config.github.username,
-            repo: config.github.repo_name,
-            path: 'PATH',
-            headers: {
-                'Authorization': `Bearer ${config.github.token}`,
-                'X-GitHub-Api-Version': '2022-11-28'
-            }
-        }
-        const existingFile = await findExistingFile(dataToFind, pathName);
-        if (existingFile.status !== 200) {
-            return {
-                "response": existingFile,
-                "status": existingFile.status
-            };
-        }
+async function attemptAddToGithub(content, pathName, message) {
+    const dataToAdd = {
+        owner: config.github.username,
+        repo: config.github.repo_name,
+        path: 'PATH',
+        message: message,
+        committer: {
+            name: config.github.committer_name,
+            email: config.github.committer_email
+        },
+        content: btoa(String.fromCharCode(...new TextEncoder().encode(content)))
+    }
 
-        dataToAdd.sha = existingFile.response.sha;
-        const updated = await uploadToGitHub(pathName, dataToAdd);
+    // Try creating first; GitHub returns 422 only if the file already
+    // exists and needs a sha, which is the only case worth a lookup.
+    const created = await uploadToGitHub(pathName, dataToAdd);
+    if (created.status !== 422) {
         return {
-            "response": updated,
-            "status": updated.status,
-            "updated": true
-        };
-    } catch (error) {
-        console.error(error);
-        return {
-            "response": error,
-            "status": 500
+            "response": created,
+            "status": created.status
         };
     }
+
+    const dataToFind = {
+        owner: config.github.username,
+        repo: config.github.repo_name,
+        path: 'PATH',
+        headers: {
+            'Authorization': `Bearer ${config.github.token}`,
+            'X-GitHub-Api-Version': '2022-11-28'
+        }
+    }
+    const existingFile = await findExistingFile(dataToFind, pathName);
+    if (existingFile.status !== 200) {
+        return {
+            "response": existingFile,
+            "status": existingFile.status
+        };
+    }
+
+    // GitHub turns an identical re-PUT into an empty commit.
+    const existingContent = (existingFile.response.content || '').replace(/\s/g, '');
+    if (existingContent === dataToAdd.content) {
+        return {
+            "response": existingFile,
+            "status": 200,
+            "updated": true
+        };
+    }
+
+    dataToAdd.sha = existingFile.response.sha;
+    const updated = await uploadToGitHub(pathName, dataToAdd);
+    return {
+        "response": updated,
+        "status": updated.status,
+        "updated": true
+    };
+}
+
+// Retries replay the whole sequence. On failure the sha and the branch head
+// are both stale, so resending the same PUT would just fail again.
+async function addToGithub(content, title, contentType, fileType) {
+    const date = getDate();
+    const pathName = `${title}/${date}/${contentType}.${fileType}`;
+    const message = `Added ${title} on ${date}`;
+    let last = { "response": null, "status": 500 };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            last = await attemptAddToGithub(content, pathName, message);
+        } catch (error) {
+            console.error(error);
+            last = { "response": error, "status": 500 };
+        }
+
+        if (last.status === 200 || last.status === 201) {
+            return last;
+        }
+        if (!RETRYABLE_STATUSES.includes(last.status)) {
+            return last;
+        }
+        if (attempt < 2) {
+            await delay(500 * (attempt + 1));
+        }
+    }
+
+    return last;
 }
 
 function formatArticleComponent(title, articleComponent) {
@@ -345,8 +378,17 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
             const questionTitle = await waitForElement('querySelector', 'h1');
             const articleComponent = await waitForElement('querySelector', '.my-article-component-container');
-            const markdownContent = formatArticleComponent(questionTitle.textContent, articleComponent);
             const languageElement = await waitForElement('querySelector', '.selected-language');
+            if (!questionTitle || !articleComponent || !languageElement) {
+                console.error('[Neetcode] missing page elements', {
+                    questionTitle: !!questionTitle,
+                    articleComponent: !!articleComponent,
+                    languageElement: !!languageElement
+                });
+                showToast('Failed to add to GitHub', '#e74c3c');
+                return;
+            }
+            const markdownContent = formatArticleComponent(questionTitle.textContent, articleComponent);
 
             const title = questionTitle.textContent.replaceAll(' ', '-').toLowerCase().trim();
             const conentAdded = await addContentToGitHub(message.code, title, markdownContent, languageElement.textContent);

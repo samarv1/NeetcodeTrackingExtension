@@ -76,9 +76,7 @@ NeetcodeTrackingExtension/
 ├── manifest.json
 ├── background.js
 ├── content-script.js
-├── icon.png
 ├── config.js (you need to create this)
-├── LICENSE
 └── README.md
 ```
 

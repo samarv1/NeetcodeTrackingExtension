@@ -1,17 +1,19 @@
-# NeetCode Tracking Extension
+# NeetCode and LeetCode Tracking Extension
 
-A Chrome extension that automatically captures your NeetCode solutions and problem descriptions, then uploads them to your GitHub repository in a well-organized format.
+A Chrome extension that captures accepted solutions and problem descriptions from NeetCode and LeetCode, then uploads them to your GitHub repository.
+
+Supports NeetCode and standard problem pages on `leetcode.com`.
 
 I use this because NeetCode's built-in GitHub sync does not work with private submission repositories.
 
 ## Features
 
-- **Automatic Code Capture**: Captures your solution code when you submit it on NeetCode, and only uploads it if the submission is accepted
+- **Automatic Code Capture**: Captures your solution code when you submit it on NeetCode or LeetCode, and only uploads it if the page reports an accepted submission. LeetCode's Run Code requests do not trigger uploads
 - **Problem Description**: Extracts and formats the problem description in Markdown
 - **GitHub Integration**: Automatically uploads both solution and problem files to your GitHub repository
-- **Organized Structure**: Creates a clean folder structure: `{problem-name}/{date}/`
+- **Organized Structure**: Creates a clean folder structure: `{site}/{problem-name}/{date}/`
 - **Multiple Languages**: Supports various programming languages (Python, Java, C++, JavaScript, etc.)
-- **In-page Feedback**: Shows a toast on the NeetCode page telling you whether the upload succeeded
+- **In-page Feedback**: Shows a toast on the problem page telling you whether the upload succeeded
 
 ## Installation
 
@@ -24,7 +26,7 @@ cd NeetcodeTrackingExtension
 
 ### 2. Create a GitHub Repository
 
-Create a new GitHub repository where you want to track your NeetCode progress:
+Create a new GitHub repository where you want to track your NeetCode and LeetCode progress:
 
 1. Go to [GitHub](https://github.com) and sign in
 2. Click the "+" icon in the top right corner
@@ -82,23 +84,28 @@ NeetcodeTrackingExtension/
 
 ## How It Works
 
-1. **Background Script** (`background.js`): Monitors network requests to NeetCode's API endpoints
+1. **Background Script** (`background.js`): Captures NeetCode execution requests and LeetCode submission requests
 2. **Content Script** (`content-script.js`): Extracts problem descriptions and handles GitHub uploads
 3. **Configuration** (`config.js`): Contains your GitHub credentials and repository settings
 
 ## Usage
 
-1. **Navigate to a NeetCode problem** (e.g., https://neetcode.io/problems/two-integer-sum?list=neetcode150/)
+1. **Navigate to a problem** on [NeetCode](https://neetcode.io/problems/two-integer-sum?list=neetcode150/) or [LeetCode](https://leetcode.com/problems/two-sum/description/). Keep the problem description open when submitting on LeetCode
 2. **Write your solution** in the code editor
 3. **Submit your solution** (click "Submit")
 4. **Extension automatically captures** your code and the problem description
 5. **Files are uploaded to GitHub** if the submission is accepted, in the following structure:
    ```
-   two-sum/
-   └── 2024-01-15/
-       ├── solution.py (or .js, .java, etc.)
-       └── problem.md
+   leetcode/
+   └── two-sum/
+       └── 2024-01-15/
+           ├── solution.py (or .js, .java, etc.)
+           └── problem.md
    ```
+
+NeetCode solutions use the same structure under `neetcode/`. LeetCode uses the problem's URL slug for its folder name, such as `two-sum`. The site folders keep questions with matching names separate.
+
+LeetCode waits up to 15 seconds for a fresh submission result. Failed submissions, unchanged old results, and timeouts skip the upload. If the problem description is unavailable, the upload also skips. NeetCode's existing result detection is unchanged.
 
 ## Supported Languages
 
@@ -107,7 +114,9 @@ The extension automatically detects and uses the correct file extension for:
 - JavaScript (`.js`)
 - Java (`.java`)
 - C++ (`.cpp`)
-- C# (`.c`)
+- C# (`.cs` on LeetCode; the existing NeetCode mapping remains `.c`)
+
+LeetCode also maps Python3 to `.py` and supports TypeScript, C, Go, Rust, Ruby, Swift, Kotlin, Scala, PHP, Dart, Racket, Erlang, Elixir, SQL, and Bash file extensions. It reads the language from the submitted request.
 
 
 ## Troubleshooting
@@ -130,6 +139,18 @@ The extension automatically detects and uses the correct file extension for:
 - The extension defaults to Python (`.py`) if it can't detect the language
 - Check if the language selector on NeetCode is properly loaded
 
+## Code-based Verification
+
+Run the tests with Node.js 22 or later. No dependency installation is needed:
+
+```bash
+node --test tests/submissions.test.cjs
+```
+
+The tests use mocked Chrome APIs, page elements, and GitHub responses. They cover submission capture, accepted and rejected results, stale results, timeouts, navigation, overlapping submissions, language mapping, upload failures and retries, unchanged content, and NeetCode regression cases.
+
+These checks pass without browser testing or live GitHub writes. Live LeetCode compatibility still needs manual verification: reload the extension and problem tab, submit an accepted solution, and check GitHub. Then verify that Run Code and a rejected submission do not upload files.
+
 ## Security Notes
 
 - **Never commit your `config.js`** file to version control
@@ -141,4 +162,4 @@ Feel free to submit issues and enhancement requests!
 
 ## License
 
-This project is open source and available under the [MIT License](LICENSE). 
+This project is open source and available under the [MIT License](LICENSE).

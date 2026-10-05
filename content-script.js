@@ -126,6 +126,14 @@ async function uploadToGitHub(pathName, dataToAdd) {
 
 
 function getLanguage(language) {
+    const leetcodeLanguages = {
+        python: 'py', python3: 'py', java: 'java', cpp: 'cpp', c: 'c',
+        csharp: 'cs', javascript: 'js', typescript: 'ts', golang: 'go',
+        rust: 'rs', ruby: 'rb', swift: 'swift', kotlin: 'kt', scala: 'scala',
+        php: 'php', dart: 'dart', racket: 'rkt', erlang: 'erl', elixir: 'ex',
+        mysql: 'sql', mssql: 'sql', oraclesql: 'sql', postgresql: 'sql', bash: 'sh'
+    };
+    if (Object.hasOwn(leetcodeLanguages, language)) return leetcodeLanguages[language];
     if (language === "Python") {
         return "py";
     } else if (language === "Java") {
@@ -140,22 +148,19 @@ function getLanguage(language) {
     return "py";
 }
 
-async function addContentToGitHub(code, questionTitle, questionContent, language) {
+function isUploadOk(result) {
+    return result.status === 200 || result.status === 201;
+}
+
+// Returns both results so the caller can tell a total failure from a solution
+// that landed while the problem description did not.
+async function addContentToGitHub(code, questionTitle, questionContent, language, site) {
     const title = questionTitle.replaceAll(' ', '-').toLowerCase().trim();
     // Both PUTs commit against the branch head, so running them in parallel
     // makes the loser fail on a stale head.
-    const solutionAdded = await addToGithub(code, title, "solution", getLanguage(language));
-    const problemAdded = await addToGithub(questionContent, title, "problem", "md");
-
-    if (solutionAdded.status !== 201 && solutionAdded.status !== 200) {
-        return solutionAdded;
-    }
-
-    if (problemAdded.status !== 201 && problemAdded.status !== 200) {
-        return problemAdded;
-    }
-
-    return problemAdded;
+    const solution = await addToGithub(code, title, "solution", getLanguage(language), site);
+    const problem = await addToGithub(questionContent, title, "problem", "md", site);
+    return { solution, problem };
 }
 
 const RETRYABLE_STATUSES = [404, 409, 422, 500, 502, 503, 504];
@@ -225,9 +230,9 @@ async function attemptAddToGithub(content, pathName, message) {
 
 // Retries replay the whole sequence. On failure the sha and the branch head
 // are both stale, so resending the same PUT would just fail again.
-async function addToGithub(content, title, contentType, fileType) {
+async function addToGithub(content, title, contentType, fileType, site) {
     const date = getDate();
-    const pathName = `${title}/${date}/${contentType}.${fileType}`;
+    const pathName = `${site}/${title}/${date}/${contentType}.${fileType}`;
     const message = `Added ${title} on ${date}`;
     let last = { "response": null, "status": 500 };
 
@@ -367,7 +372,95 @@ function isSubmissionAccepted(resultElement) {
     return !!resultElement && resultElement.classList.contains('submission-result-accepted');
 }
 
+function getLeetCodeProblemSlug() {
+    return location.pathname.match(/^\/problems\/([a-z0-9-]+)(?:\/|$)/)?.[1];
+}
+
+// LeetCode can reuse the result node, updating only its text between submissions.
+function waitForLeetCodeResult(slug, signal, timeoutMs = 15000) {
+    const selector = '[data-e2e-locator="submission-result"]';
+    const initial = document.querySelector(selector);
+    const initialText = initial?.textContent.trim();
+    const terminalResults = new Set([
+        'Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Memory Limit Exceeded',
+        'Output Limit Exceeded', 'Runtime Error', 'Compile Error', 'Internal Error', 'Unknown Error'
+    ]);
+    let changed = false;
+
+    return new Promise(resolve => {
+        let timer;
+        const finish = result => {
+            observer.disconnect();
+            clearTimeout(timer);
+            signal.removeEventListener('abort', abort);
+            resolve(result);
+        };
+        const abort = () => finish(null);
+        const observer = new MutationObserver(() => {
+            if (getLeetCodeProblemSlug() !== slug) return finish(null);
+            const result = document.querySelector(selector);
+            const text = result?.textContent.trim();
+            changed ||= result !== initial || text !== initialText;
+            if (changed && terminalResults.has(text)) finish(text);
+        });
+        observer.observe(document.documentElement, {
+            childList: true, subtree: true, characterData: true,
+            attributes: true, attributeFilter: ['data-e2e-locator']
+        });
+        signal.addEventListener('abort', abort, { once: true });
+        timer = setTimeout(() => finish(null), timeoutMs);
+        if (signal.aborted) finish(null);
+    });
+}
+
+let pendingLeetCodeSubmission;
+
+async function handleLeetCodeSubmission(message) {
+    if (location.hostname !== 'leetcode.com' || getLeetCodeProblemSlug() !== message.title ||
+        typeof message.code !== 'string' || !message.code.trim() || typeof message.language !== 'string') return;
+
+    pendingLeetCodeSubmission?.abort();
+    const controller = new AbortController();
+    pendingLeetCodeSubmission = controller;
+    try {
+        const resultPromise = waitForLeetCodeResult(message.title, controller.signal);
+        const article = document.querySelector('[data-track-load="description_content"], [data-cy="question-content"]');
+        const heading = document.querySelector('.text-title-large, [data-cy="question-title"]');
+        const title = heading?.textContent.trim().replace(/^\d+\.\s*/, '') || message.title;
+        // The submission view can replace the description panel before judging finishes.
+        const markdown = article?.textContent.trim() ? formatArticleComponent(title, article) : '';
+        const result = await resultPromise;
+        if (controller.signal.aborted || getLeetCodeProblemSlug() !== message.title) return;
+        if (result !== 'Accepted') {
+            showToast('Submission not accepted, skipping GitHub sync', '#e74c3c');
+            return;
+        }
+        if (!markdown) {
+            showToast('Failed to add to GitHub', '#e74c3c');
+            return;
+        }
+        const { solution, problem } = await addContentToGitHub(message.code, message.title, markdown, message.language, 'leetcode');
+        if (!isUploadOk(solution)) {
+            showToast('Failed to add to GitHub', '#e74c3c');
+        } else if (!isUploadOk(problem)) {
+            showToast('Solution saved, problem description failed', '#f39c12');
+        } else {
+            showToast(solution.updated ? 'Successfully updated in GitHub' : 'Successfully added to GitHub', '#007bff');
+        }
+    } catch (error) {
+        console.error(error);
+        showToast('Failed to add to GitHub', '#e74c3c');
+    } finally {
+        controller.abort();
+        if (pendingLeetCodeSubmission === controller) pendingLeetCodeSubmission = null;
+    }
+}
+
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+    if (message.type === 'LEETCODE_CODE_DATA') {
+        await handleLeetCodeSubmission(message);
+        return;
+    }
     if (message.type === 'CODE_DATA' && message.code && message.title) {
         try {
             const resultElement = await waitForElement('querySelector', '.submission-result-accepted, .submission-result-wrong', true);
@@ -391,12 +484,13 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             const markdownContent = formatArticleComponent(questionTitle.textContent, articleComponent);
 
             const title = questionTitle.textContent.replaceAll(' ', '-').toLowerCase().trim();
-            const conentAdded = await addContentToGitHub(message.code, title, markdownContent, languageElement.textContent);
-            if (conentAdded.status === 201 || conentAdded.status === 200) {
-                const message = conentAdded.updated ? 'Successfully updated in GitHub' : 'Successfully added to GitHub';
-                showToast(message, '#007bff');
-            } else {
+            const { solution, problem } = await addContentToGitHub(message.code, title, markdownContent, languageElement.textContent, 'neetcode');
+            if (!isUploadOk(solution)) {
                 showToast('Failed to add to GitHub', '#e74c3c');
+            } else if (!isUploadOk(problem)) {
+                showToast('Solution saved, problem description failed', '#f39c12');
+            } else {
+                showToast(solution.updated ? 'Successfully updated in GitHub' : 'Successfully added to GitHub', '#007bff');
             }
         } catch (error) {
             showToast('Failed to add to GitHub', '#e74c3c');
